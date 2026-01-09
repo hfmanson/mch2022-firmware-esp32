@@ -46,6 +46,7 @@
 #include "wifi_defaults.h"
 #include "wifi_ota.h"
 #include "ws2812.h"
+#include "soc/uart_reg.h"
 
 extern const uint8_t logo_screen_png_start[] asm("_binary_logo_screen_png_start");
 extern const uint8_t logo_screen_png_end[] asm("_binary_logo_screen_png_end");
@@ -186,6 +187,181 @@ static void audio_player_task(void* pvParameters) {
     }
 
     vTaskDelete(NULL);
+}
+
+#define MY_UART 0
+#define RD_BUF_SIZE 256
+#define UART_EMPTY_THRESH_DEFAULT  (10)
+#define UART_FULL_THRESH_DEFAULT  (120)
+#define UART_TOUT_THRESH_DEFAULT   (10)
+#define UART_CLKDIV_FRAG_BIT_WIDTH  (3)
+#define UART_TOUT_REF_FACTOR_DEFAULT (UART_CLK_FREQ/(REF_CLK_FREQ<<UART_CLKDIV_FRAG_BIT_WIDTH))
+#define UART_TX_IDLE_NUM_DEFAULT   (0)
+#define UART_PATTERN_DET_QLEN_DEFAULT (10)
+#define UART_MIN_WAKEUP_THRESH      (2)
+
+QueueHandle_t uart_queue;
+
+static void handle_data(xQueueHandle button_queue, char *data, int size)
+{
+	int result = -1;
+	switch (size) {
+	case 1:
+		switch (data[0]) {
+		case '\r':
+			result = RP2040_INPUT_BUTTON_ACCEPT;
+			break;
+		case 27:
+			result = RP2040_INPUT_BUTTON_BACK;
+			break;
+		}
+		break;
+	case 3:
+		// cursor keys
+		if (data[0] == 27 && data[1] == '[') {
+			switch (data[2]) {
+			case 'D':
+				result = RP2040_INPUT_JOYSTICK_LEFT;
+				break;
+			case 'C':
+				result = RP2040_INPUT_JOYSTICK_RIGHT;
+				break;
+			case 'A':
+				result = RP2040_INPUT_JOYSTICK_UP;
+				break;
+			case 'B':
+				result = RP2040_INPUT_JOYSTICK_DOWN;
+				break;
+			}
+		}
+		break;
+	case 5:
+		// function keys F1 - F4
+		if (data[0] == 27 && data[1] == '[' && data[2] == '1' && data[4] == 0x7E) {
+			switch (data[3]) {
+			case '1':
+				result = RP2040_INPUT_BUTTON_HOME;
+				break;
+			case '2':
+				result = RP2040_INPUT_BUTTON_MENU;
+				break;
+			case '3':
+				result = RP2040_INPUT_BUTTON_SELECT;
+				break;
+			case '4':
+				result = RP2040_INPUT_BUTTON_START;
+				break;
+			}
+		}
+		break;
+	}
+	if (result != -1) {
+		rp2040_input_message_t message = {
+			(uint8_t) result,
+			true,
+		};
+		xQueueSend(button_queue, &message, (TickType_t) 10);
+		message.state = false;
+		xQueueSend(button_queue, &message, (TickType_t) 10);
+	}
+}
+
+static void uartTask(void *pvParameter) {
+    uart_event_t event;
+    uint8_t* dtmp = (uint8_t*) malloc(RD_BUF_SIZE);
+    RP2040* rp2040 = get_rp2040();
+
+    for(;;) {
+        //Waiting for UART event.
+        if(xQueueReceive(uart_queue, (void * )&event, (portTickType)portMAX_DELAY)) {
+            switch(event.type) {
+                //Event of UART receving data
+                /*We'd better handler data event fast, there would be much more data events than
+                other types of events. If we take too much time on data event, the queue might
+                be full.*/
+                case UART_DATA:
+                    ESP_LOGI(TAG, "siz: %d", event.size);
+                    uart_read_bytes(MY_UART, dtmp, event.size, portMAX_DELAY);
+#ifdef UART_DEBUG
+					for (int i = 0; i < event.size; i++) {
+						ESP_LOGI(TAG, "data[%2d] = %02X", i, dtmp[i]);
+					}
+#endif
+					handle_data(rp2040->queue, (char *) dtmp, event.size);
+                    break;
+                //Event of HW FIFO overflow detected
+                case UART_FIFO_OVF:
+                    ESP_LOGW(TAG, "hw fifo overflow");
+                    // If fifo overflow happened, you should consider adding flow control for your application.
+                    // The ISR has already reset the rx FIFO,
+                    // As an example, we directly flush the rx buffer here in order to read more data.
+                    uart_flush_input(MY_UART);
+                    xQueueReset(uart_queue);
+                    break;
+                //Event of UART ring buffer full
+                case UART_BUFFER_FULL:
+                    ESP_LOGW(TAG, "ring buffer full");
+                    // If buffer full happened, you should consider encreasing your buffer size
+                    // As an example, we directly flush the rx buffer here in order to read more data.
+                    uart_flush_input(MY_UART);
+                    xQueueReset(uart_queue);
+                    break;
+                //Event of UART RX break detected
+                case UART_BREAK:
+                    ESP_LOGI(TAG, "uart rx break");
+                    break;
+                //Event of UART parity check error
+                case UART_PARITY_ERR:
+                    ESP_LOGI(TAG, "uart parity error");
+                    break;
+                //Event of UART frame error
+                case UART_FRAME_ERR:
+                    ESP_LOGI(TAG, "uart frame error");
+                    break;
+                //UART_PATTERN_DET
+                case UART_PATTERN_DET:
+                
+                    break;
+                //Others
+                default:
+                    ESP_LOGI(TAG, "uart event type: %d", event.type);
+                    break;
+            }
+        }
+    }
+    free(dtmp);
+    dtmp = NULL;
+    vTaskDelete(NULL);
+}
+
+static void my_uart_init() {
+    //uart_param_config(MY_UART, &uart_config);   //Configure the uart hardware
+    //uart_set_pin(MY_UART, CONFIG_DRIVER_FSOVERBUS_UART_TX, CONFIG_DRIVER_FSOVERBUS_UART_RX, CONFIG_DRIVER_FSOVERBUS_UART_CTS, -1); //Change pins
+	uart_config_t uartcfg = {
+		.baud_rate = 115200,
+		.data_bits = UART_DATA_8_BITS,
+		.parity = UART_PARITY_DISABLE,
+		.stop_bits = UART_STOP_BITS_1,
+		.flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+		.rx_flow_ctrl_thresh = 0
+	};
+	uart_param_config(0, &uartcfg);
+	uart_driver_install(0, RD_BUF_SIZE, RD_BUF_SIZE, 40, &uart_queue, 0);
+
+    uart_intr_config_t uart_intr = {
+        .intr_enable_mask = UART_RXFIFO_FULL_INT_ENA_M
+                            | UART_RXFIFO_TOUT_INT_ENA_M
+                            | UART_FRM_ERR_INT_ENA_M
+                            | UART_RXFIFO_OVF_INT_ENA_M
+                            | UART_BRK_DET_INT_ENA_M
+                            | UART_PARITY_ERR_INT_ENA_M,
+        .rxfifo_full_thresh = 64,
+        .rx_timeout_thresh = UART_TOUT_THRESH_DEFAULT,
+        .txfifo_empty_intr_thresh = UART_EMPTY_THRESH_DEFAULT
+    };
+    uart_intr_config(MY_UART, &uart_intr);
+    xTaskCreatePinnedToCore(uartTask, "fsoverbus_uart", 16000, NULL, 100, NULL, 0);
+
 }
 
 void app_main(void) {
@@ -424,6 +600,8 @@ void app_main(void) {
 
         /* Rick that roll */
         xTaskCreate(audio_player_task, "audio_player_task", 2048, NULL, 12, NULL);
+
+        my_uart_init();
 
         /* Launcher menu */
         while (true) {
