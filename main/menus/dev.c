@@ -28,7 +28,7 @@
 extern const uint8_t dev_png_start[] asm("_binary_dev_png_start");
 extern const uint8_t dev_png_end[] asm("_binary_dev_png_end");
 
-typedef enum action {
+typedef enum menu_dev_action {
     ACTION_NONE,
     ACTION_BACK,
     ACTION_FPGA_TEST,
@@ -38,7 +38,8 @@ typedef enum action {
     ACTION_ADC_TEST,
     ACTION_SAO,
     ACTION_IR,
-    ACTION_IR_RENZE
+    ACTION_IR_RENZE,
+    ACTION_IR_SAMSUNG
 } menu_dev_action_t;
 
 static void render_help(pax_buf_t* pax_buffer) {
@@ -69,6 +70,7 @@ void menu_dev(xQueueHandle button_queue) {
 
     menu_insert_item(menu, "Infrared remote (deco lights)", NULL, (void*) ACTION_IR, -1);
     menu_insert_item(menu, "Infrared remote (badge tent)", NULL, (void*) ACTION_IR_RENZE, -1);
+    menu_insert_item(menu, "Infrared remote (samsung)", NULL, (void*) ACTION_IR_SAMSUNG, -1);
     menu_insert_item(menu, "File browser (SD card)", NULL, (void*) ACTION_FILE_BROWSER, -1);
     menu_insert_item(menu, "File browser (internal)", NULL, (void*) ACTION_FILE_BROWSER_INT, -1);
     menu_insert_item(menu, "Button test", NULL, (void*) ACTION_BUTTON_TEST, -1);
@@ -138,9 +140,11 @@ void menu_dev(xQueueHandle button_queue) {
             } else if (action == ACTION_SAO) {
                 menu_sao(button_queue);
             } else if (action == ACTION_IR) {
-                menu_ir(button_queue, false);
+                menu_ir(button_queue, MENU_ACTION_IR);
             } else if (action == ACTION_IR_RENZE) {
-                menu_ir(button_queue, true);
+                menu_ir(button_queue, MENU_ACTION_IR_RENZE);
+            } else if (action == ACTION_IR_SAMSUNG) {
+                menu_ir(button_queue, MENU_ACTION_IR_SAMSUNG);
             } else if (action == ACTION_BACK) {
                 break;
             }

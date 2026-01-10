@@ -68,6 +68,46 @@
 #define IR_CMD_BADGE_PINK            0x16
 #define IR_CMD_BADGE_SMOOTH          0x0F  // Firmware bug in the ledstrip has this button swapped
 
+#define IR_ADDR_SAMSUNG        0x0707
+#define IR_CMD_INPUT_SOURCE    1
+#define IR_CMD_POWER           2
+#define IR_CMD_1               4
+#define IR_CMD_2               5
+#define IR_CMD_3               6
+#define IR_CMD_VOLUME_UP       7
+#define IR_CMD_4               8
+#define IR_CMD_5               9
+#define IR_CMD_6              10
+#define IR_CMD_VOLUME_DOWN    11
+#define IR_CMD_7              12
+#define IR_CMD_8              13
+#define IR_CMD_9              14
+#define IR_CMD_MUTE           15
+#define IR_CMD_CHANNEL_DOWN   16
+#define IR_CMD_0              17
+#define IR_CMD_CHANNEL_UP     18
+#define IR_CMD_LAST           19
+#define IR_CMD_MENU           26
+#define IR_CMD_INFO           31
+#define IR_CMD_AD_SUBT        37
+#define IR_CMD_EXIT           45
+#define IR_CMD_E_MANUAL       63
+#define IR_CMD_TOOLS          75
+#define IR_CMD_GUIDE          79
+#define IR_CMD_RETURN         88
+#define IR_CMD_CURSOR_UP      96
+#define IR_CMD_CURSOR_DOWN    97
+#define IR_CMD_CURSOR_RIGHT   98
+#define IR_CMD_CURSOR_LEFT   101
+#define IR_CMD_ENTER         104
+#define IR_CMD_CH LIST       107
+#define IR_CMD_SMART_HUB     121
+#define IR_CMD_3D            159
+#define IR_CMD_HDMI2         190
+#define IR_CMD_HDMI3         194
+#define IR_CMD_HDMI4         197
+#define IR_CMD_HDMI1         233
+
 static void send_ir(uint16_t address, uint8_t command) {
     RP2040* rp2040 = get_rp2040();
     rp2040_ir_send(rp2040, address, command);
@@ -80,7 +120,7 @@ static void send_ir_repeated(uint16_t address, uint8_t command) {
     }
 }
 
-void menu_ir(xQueueHandle button_queue, bool alternative) {
+void menu_ir(xQueueHandle button_queue, menu_ir_action_t menu_ir_action) {
     pax_buf_t*        pax_buffer = get_pax_buffer();
     const pax_font_t* font       = pax_font_saira_regular;
     menu_t*           menu       = menu_alloc("Infrared remote", 34, 16);
@@ -96,8 +136,11 @@ void menu_ir(xQueueHandle button_queue, bool alternative) {
 
     menu->grid_entry_count_x = 6;
     menu->grid_entry_count_y = 4;
+    uint16_t address = IR_ADDR_DECO;
 
-    if (!alternative) {
+    switch (menu_ir_action) {
+    case MENU_ACTION_IR:
+        address = IR_ADDR_DECO;
         menu_insert_item(menu, "OFF", NULL, (void*) IR_CMD_OFF, -1);
         menu_insert_item(menu, "ON", NULL, (void*) IR_CMD_ON, -1);
         menu_insert_item(menu, "B+", NULL, (void*) IR_CMD_BRIGHTNESS_UP, -1);
@@ -125,7 +168,9 @@ void menu_ir(xQueueHandle button_queue, bool alternative) {
         menu_insert_item(menu, "Music\n4", NULL, (void*) IR_CMD_MUSIC4, -1);
         menu_insert_item(menu, "Mode", NULL, (void*) IR_CMD_MODE, -1);
         menu_insert_item(menu, "Night", NULL, (void*) IR_CMD_NIGHT, -1);
-    } else {
+        break;
+    case MENU_ACTION_IR_RENZE:
+        address = IR_ADDR_BADGE;
         menu_insert_item(menu, "B+", NULL, (void*) IR_CMD_BADGE_BRIGHTNESS_UP, -1);
         menu_insert_item(menu, "B-", NULL, (void*) IR_CMD_BADGE_BRIGHTNESS_DOWN, -1);
         menu_insert_item(menu, "Off", NULL, (void*) IR_CMD_BADGE_OFF, -1);
@@ -153,6 +198,30 @@ void menu_ir(xQueueHandle button_queue, bool alternative) {
         menu_insert_item(menu, "Yellow", NULL, (void*) IR_CMD_BADGE_YELLOW, -1);
         menu_insert_item(menu, "Darker\ngreen", NULL, (void*) IR_CMD_BADGE_DARKER_GREEN, -1);
         menu_insert_item(menu, "Pink", NULL, (void*) IR_CMD_BADGE_PINK, -1);
+        break;
+    case MENU_ACTION_IR_SAMSUNG:
+        address = IR_ADDR_SAMSUNG;
+        menu_insert_item(menu, "On", NULL, (void*) IR_CMD_POWER, -1);
+        menu_insert_item(menu, "Up", NULL, (void*) IR_CMD_CURSOR_UP, -1);
+        menu_insert_item(menu, "Smart", NULL, (void*) IR_CMD_SMART_HUB, -1);
+        menu_insert_item(menu, "Vol +", NULL, (void*) IR_CMD_VOLUME_UP, -1);
+        menu_insert_item(menu, "Ch +", NULL, (void*) IR_CMD_CHANNEL_UP, -1);
+        menu_insert_item(menu, "Mute", NULL, (void*) IR_CMD_MUTE, -1);
+
+        menu_insert_item(menu, "Left", NULL, (void*) IR_CMD_CURSOR_LEFT, -1);
+        menu_insert_item(menu, "Enter", NULL, (void*) IR_CMD_ENTER, -1);
+        menu_insert_item(menu, "Right", NULL, (void*) IR_CMD_CURSOR_RIGHT, -1);
+        menu_insert_item(menu, "Vol -", NULL, (void*) IR_CMD_VOLUME_DOWN, -1);
+        menu_insert_item(menu, "Ch -", NULL, (void*) IR_CMD_CHANNEL_DOWN, -1);
+        menu_insert_item(menu, "Exit", NULL, (void*) IR_CMD_EXIT, -1);
+
+        menu_insert_item(menu, "Info", NULL, (void*) IR_CMD_INFO, -1);
+        menu_insert_item(menu, "Down", NULL, (void*) IR_CMD_CURSOR_DOWN, -1);
+        menu_insert_item(menu, "Menu", NULL, (void*) IR_CMD_MENU, -1);
+        menu_insert_item(menu, "Tools", NULL, (void*) IR_CMD_TOOLS, -1);
+        menu_insert_item(menu, "Input\nSource", NULL, (void*) IR_CMD_INPUT_SOURCE, -1);
+        menu_insert_item(menu, "Return", NULL, (void*) IR_CMD_RETURN, -1);
+        break;
     }
 
     pax_noclip(pax_buffer);
@@ -167,10 +236,11 @@ void menu_ir(xQueueHandle button_queue, bool alternative) {
                     case RP2040_INPUT_JOYSTICK_PRESS:
                     case RP2040_INPUT_BUTTON_ACCEPT:
                         {
-                            uint16_t address = alternative ? IR_ADDR_BADGE : IR_ADDR_DECO;
                             uint32_t command = (uint32_t) menu_get_callback_args(menu, menu_get_position(menu));
                             if ((command == IR_CMD_SPEED_DECREASE) || (command == IR_CMD_SPEED_INCREASE) || (command == IR_CMD_MODE) ||
-                                (command == IR_CMD_BRIGHTNESS_UP) || (command == IR_CMD_BRIGHTNESS_DOWN)) {
+                                (command == IR_CMD_BRIGHTNESS_UP) || (command == IR_CMD_BRIGHTNESS_DOWN) ||
+                                (command == IR_CMD_VOLUME_UP || command == IR_CMD_VOLUME_DOWN) ||
+                                (command == IR_CMD_CHANNEL_UP || command == IR_CMD_CHANNEL_DOWN)) {
                                 send_ir(address, command);
                             } else {
                                 send_ir_repeated(address, command);
