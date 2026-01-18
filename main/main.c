@@ -47,10 +47,138 @@
 #include "wifi_ota.h"
 #include "ws2812.h"
 
+#include "hidwifi.h"
+
+#define HID_MAX_KEYS 6
+
+typedef struct {
+    uint8_t modifier;
+    uint8_t reserved;
+    uint8_t keys[HID_MAX_KEYS];
+} hid_report_t;
+
 extern const uint8_t logo_screen_png_start[] asm("_binary_logo_screen_png_start");
 extern const uint8_t logo_screen_png_end[] asm("_binary_logo_screen_png_end");
 
 static const char* TAG = "main";
+
+static hid_report_t prev;
+static xQueueHandle g_button_queue;
+
+static void on_key(bool pressed, uint8_t key)
+{
+    int input_button = -1;
+    switch (key) {
+        case HID_KEY_ENTER:
+            input_button = RP2040_INPUT_BUTTON_ACCEPT;
+            break;
+        case HID_KEY_ESCAPE:
+            input_button = RP2040_INPUT_BUTTON_BACK;
+            break;
+        case HID_KEY_LEFT:
+            input_button = RP2040_INPUT_JOYSTICK_LEFT;
+            break;
+        case HID_KEY_RIGHT:
+            input_button = RP2040_INPUT_JOYSTICK_RIGHT;
+            break;
+        case HID_KEY_UP:
+            input_button = RP2040_INPUT_JOYSTICK_UP;
+            break;
+        case HID_KEY_DOWN:
+            input_button = RP2040_INPUT_JOYSTICK_DOWN;
+            break;
+        case HID_KEY_KP_ENTER:
+            input_button = RP2040_INPUT_JOYSTICK_PRESS;
+            break;
+        case HID_KEY_F1:
+            input_button = RP2040_INPUT_BUTTON_HOME;
+            break;
+        case HID_KEY_F2:
+            input_button = RP2040_INPUT_BUTTON_MENU;
+            break;
+        case HID_KEY_F3:
+            input_button = RP2040_INPUT_BUTTON_SELECT;
+            break;
+        case HID_KEY_F4:
+            input_button = RP2040_INPUT_BUTTON_START;
+            break;
+        default:
+            input_button = -1;
+    }
+    if (input_button != -1) {
+        rp2040_input_message_t message = {
+            (uint8_t) input_button,
+            pressed,
+        };
+        xQueueSend(g_button_queue, &message, (TickType_t) 0);
+    }
+}
+
+static void on_modifier(bool pressed, uint8_t key)
+{
+}
+
+static int key_in_report(const hid_report_t *r, uint8_t key)
+{
+    for (int i = 0; i < HID_MAX_KEYS; i++)
+        if (r->keys[i] == key)
+            return 1;
+    return 0;
+}
+
+void hid_process(const hid_report_t *curr)
+{
+    // 1. Detect released keys
+    for (int i = 0; i < HID_MAX_KEYS; i++) {
+        uint8_t key = prev.keys[i];
+        if (key != 0 && !key_in_report(curr, key)) {
+            // key was present before, but not now
+            on_key(false, key);
+        }
+    }
+
+    // 2. Detect pressed keys
+    for (int i = 0; i < HID_MAX_KEYS; i++) {
+        uint8_t key = curr->keys[i];
+        if (key != 0 && !key_in_report(&prev, key)) {
+            // key is new
+            on_key(true, key);
+        }
+    }
+
+    // 3. Modifier changes
+    uint8_t prev_mod = prev.modifier;
+    uint8_t curr_mod = curr->modifier;
+
+    uint8_t changed = prev_mod ^ curr_mod;
+
+    if (changed) {
+        for (uint8_t bit = 1; bit != 0; bit <<= 1) {
+            if (!(changed & bit))
+                continue;
+
+            if (curr_mod & bit)
+                on_modifier(true, bit);
+            else
+                on_modifier(false, bit);
+        }
+    }
+}
+
+
+static void wifi_kbd_cb(const uint8_t *r, size_t len) {
+    // r[0] = modifiers
+    // r[1] = reserved
+    // r[2..7] = keycodes
+     ESP_LOGI(TAG, "wifi_kbd_cb: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
+     r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9], r[10], r[11]);
+     hid_report_t *current = (hid_report_t *) r;
+     hid_process(current);
+     prev = *current;
+}
+
+static void wifi_mouse_cb(const uint8_t *r, size_t len) {
+}
 
 void display_fatal_error(const char* line0, const char* line1, const char* line2, const char* line3) {
     pax_buf_t*        pax_buffer = get_pax_buffer();
@@ -259,6 +387,7 @@ void app_main(void) {
 
     RP2040* rp2040 = get_rp2040();
 
+    g_button_queue = rp2040->queue;
     uint8_t brightness = 0xFF;
     nvs_get_u8(handle, "brightness", &brightness);
     rp2040_set_lcd_backlight(rp2040, brightness);
@@ -424,6 +553,16 @@ void app_main(void) {
 
         /* Rick that roll */
         xTaskCreate(audio_player_task, "audio_player_task", 2048, NULL, 12, NULL);
+        // WiFi is configured via Settings → WiFi → Connect
+        // So we just wait for the user to connect.
+
+        hidwifi_config_t cfg = {
+            .keyboard_cb = wifi_kbd_cb,
+            .mouse_cb    = wifi_mouse_cb,
+            .port        = 4242,
+        };
+
+        hidwifi_start(&cfg);
 
         /* Launcher menu */
         while (true) {
