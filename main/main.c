@@ -47,6 +47,8 @@
 #include "wifi_ota.h"
 #include "ws2812.h"
 
+#include "hidserial.h"
+
 extern const uint8_t logo_screen_png_start[] asm("_binary_logo_screen_png_start");
 extern const uint8_t logo_screen_png_end[] asm("_binary_logo_screen_png_end");
 
@@ -424,6 +426,8 @@ void app_main(void) {
 
         /* Rick that roll */
         xTaskCreate(audio_player_task, "audio_player_task", 2048, NULL, 12, NULL);
+
+        hid_uart_init();
 
         /* Launcher menu */
         while (true) {
